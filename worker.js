@@ -1,34 +1,96 @@
+const SITE_NAME = 'OTC 音乐网';
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname !== '/') {
-      return new Response('Not Found', { status: 404 });
+    if (request.method === 'OPTIONS') {
+      return corsPreflightResponse();
     }
-    const siteName = env.SITE_NAME  ?? 'OTC 音乐网';
-    const proxy    = env.PROXY_URL  ?? 'https://proxy.api.030101.xyz/';
-    const html = buildHTML(siteName, proxy);
-    return new Response(html, {
+    if (url.pathname.startsWith('/proxy/')) {
+      return handleProxy(request, url);
+    }
+    const origin = url.origin;
+    const proxyBase = origin + '/proxy/';
+    return new Response(buildHTML(proxyBase), {
       headers: {
-        'Content-Type':  'text/html; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache',
       },
     });
   },
 };
+async function handleProxy(request, url) {
+  const rawTarget = url.pathname.slice('/proxy/'.length) + url.search;
+  let targetUrl;
+  try {
+    targetUrl = new URL(decodeURIComponent(rawTarget));
+  } catch {
+    return new Response('Invalid proxy target URL', { status: 400 });
+  }
+  const allowedHosts = [
+    'u.y.qq.com',
+    'music.haitangw.cc',
+    'y.gtimg.cn',
+    'isure.stream.qqmusic.qq.com',
+    'ws.stream.qqmusic.qq.com',
+    'dl.stream.qqmusic.qq.com',
+    'aqqmusic.tc.qq.com',
+  ];
+  if (!allowedHosts.some(h => targetUrl.hostname === h || targetUrl.hostname.endsWith('.' + h))) {
+    return new Response('Proxy target not allowed: ' + targetUrl.hostname, { status: 403 });
+  }
+  const proxyHeaders = new Headers();
+  proxyHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+  proxyHeaders.set('Referer', 'https://y.qq.com/');
+  proxyHeaders.set('Origin', 'https://y.qq.com');
+  const ct = request.headers.get('Content-Type');
+  if (ct) proxyHeaders.set('Content-Type', ct);
+  const init = {
+    method: request.method,
+    headers: proxyHeaders,
+    redirect: 'follow',
+  };
+  if (!['GET', 'HEAD'].includes(request.method)) {
+    init.body = request.body;
+  }
+  let upstreamRes;
+  try {
+    upstreamRes = await fetch(targetUrl.toString(), init);
+  } catch (err) {
+    return new Response('Upstream fetch failed: ' + err.message, { status: 502 });
+  }
+  const resHeaders = new Headers(upstreamRes.headers);
+  resHeaders.set('Access-Control-Allow-Origin', '*');
+  resHeaders.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  resHeaders.set('Access-Control-Allow-Headers', 'Content-Type');
+  return new Response(upstreamRes.body, {
+    status: upstreamRes.status,
+    statusText: upstreamRes.statusText,
+    headers: resHeaders,
+  });
+}
 
-function buildHTML(siteName, proxy) {
-  return `
-<!DOCTYPE html>
+function corsPreflightResponse() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Max-Age': '86400',
+    },
+  });
+}
+function buildHTML(proxyBase) {
+  return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <meta name="theme-color" content="#0f0c29">
-    <title>${siteName}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <title>${SITE_NAME}</title>
+    <script src="https://cdn.tailwindcss.com"><\/script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"><\/script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"><\/script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&display=swap" rel="stylesheet">
     <style>
         * { font-family: 'Inter', system-ui, -apple-system, sans-serif; box-sizing: border-box; }
@@ -216,6 +278,21 @@ function buildHTML(siteName, proxy) {
         }
         @media (min-width: 640px) { .song-index { width: 28px; } }
         .song-index-playing { color: #a855f7; font-weight: 700; }
+        .lyric-line {
+            text-align: center;
+            padding: 0.4rem 0.5rem;
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.3);
+            transition: all 0.35s ease;
+            line-height: 1.65;
+            border-radius: 0.5rem;
+        }
+        .lyric-line-active {
+            color: white;
+            font-size: 0.95rem;
+            font-weight: 600;
+            background: linear-gradient(90deg, rgba(168,85,247,0.18), rgba(236,72,153,0.1));
+        }
         @media (min-width: 1024px) {
             .layout-wrapper {
                 display: grid;
@@ -256,14 +333,70 @@ function buildHTML(siteName, proxy) {
             background: linear-gradient(90deg, #a855f7, #ec489a);
             transition: width 0.5s linear;
         }
+        .tablet-player {
+            display: none;
+        }
+        @media (min-width: 640px) and (max-width: 1023px) {
+            .tablet-player {
+                display: block;
+                position: fixed;
+                bottom: 0; left: 0; right: 0;
+                z-index: 50;
+                background: rgba(10,8,35,0.97);
+                backdrop-filter: blur(24px);
+                border-top: 1px solid rgba(168,85,247,0.35);
+                padding: 0 1.5rem;
+            }
+            .tablet-player-inner {
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+                height: 72px;
+            }
+            .tablet-player-art {
+                width: 48px; height: 48px;
+                border-radius: 10px;
+                object-fit: cover;
+                flex-shrink: 0;
+            }
+            .tablet-player-info {
+                flex: 1;
+                min-width: 0;
+            }
+            .tablet-player-controls {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                flex-shrink: 0;
+            }
+            .tablet-player-prog {
+                position: absolute;
+                top: 0; left: 0; right: 0;
+                height: 2px;
+                background: rgba(255,255,255,0.1);
+                cursor: pointer;
+            }
+            .tablet-player-prog-fill {
+                height: 100%;
+                background: linear-gradient(90deg, #a855f7, #ec489a);
+                transition: width 0.5s linear;
+                pointer-events: none;
+            }
+        }
         .player-inline { display: none; }
         .player-mini   { display: flex; }
         @media (min-width: 640px) {
             .player-inline { display: block; }
             .player-mini   { display: none; }
         }
+        @media (min-width: 640px) and (max-width: 1023px) {
+            .player-inline { display: none; }
+        }
         @media (max-width: 639px) {
             .page-bottom-padding { padding-bottom: 80px; }
+        }
+        @media (min-width: 640px) and (max-width: 1023px) {
+            .page-bottom-padding { padding-bottom: 120px; }
         }
         @media (max-width: 479px) {
             .song-actions-extra { display: none; }
@@ -271,20 +404,82 @@ function buildHTML(siteName, proxy) {
         @media (min-width: 1024px) {
             .song-list-desktop { max-height: calc(100vh - 280px) !important; }
         }
+        .lyrics-panel-inline {
+            max-height: 220px;
+            overflow-y: auto;
+            padding: 0.25rem 0.5rem;
+            scroll-behavior: smooth;
+            margin-top: 0.75rem;
+            border-top: 1px solid rgba(255,255,255,0.08);
+        }
+        .lyrics-panel-inline::-webkit-scrollbar { width: 3px; }
+        .lyrics-panel-inline::-webkit-scrollbar-track { background: transparent; }
+        .lyrics-panel-inline::-webkit-scrollbar-thumb { background: rgba(168,85,247,0.4); border-radius: 10px; }
+        .floating-lyric-bar {
+            position: fixed;
+            left: 0; right: 0;
+            z-index: 49;
+            background: rgba(15,12,41,0.92);
+            backdrop-filter: blur(16px);
+            text-align: center;
+            font-weight: 500;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: opacity 0.3s, transform 0.3s;
+            border-top: 1px solid rgba(168,85,247,0.25);
+        }
+        @media (max-width: 639px) {
+            .floating-lyric-bar {
+                bottom: 64px;
+                padding: 0.45rem 1.25rem;
+                font-size: 0.82rem;
+                color: rgba(255,255,255,0.85);
+            }
+        }
+        @media (min-width: 640px) and (max-width: 1023px) {
+            .floating-lyric-bar {
+                bottom: 72px;
+                padding: 0.55rem 2.5rem;
+                font-size: 0.92rem;
+                color: rgba(255,255,255,0.9);
+                background: linear-gradient(
+                    90deg,
+                    rgba(15,12,41,0.94) 0%,
+                    rgba(30,20,60,0.96) 40%,
+                    rgba(30,20,60,0.96) 60%,
+                    rgba(15,12,41,0.94) 100%
+                );
+            }
+        }
+        @media (min-width: 1024px) {
+            .floating-lyric-bar { display: none !important; }
+        }
+        .sidebar-lyrics-panel {
+            max-height: 260px;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+            padding: 0.25rem 0.25rem;
+            margin-top: 0.5rem;
+        }
+        .sidebar-lyrics-panel::-webkit-scrollbar { width: 3px; }
+        .sidebar-lyrics-panel::-webkit-scrollbar-track { background: transparent; }
+        .sidebar-lyrics-panel::-webkit-scrollbar-thumb { background: rgba(168,85,247,0.4); border-radius: 10px; }
     </style>
 </head>
 <body>
 <div id="app" class="relative z-10 max-w-[1400px] mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 lg:py-8 page-bottom-padding">
     <div class="text-center mb-5 sm:mb-8 layout-main">
         <h1 class="text-3xl sm:text-4xl lg:text-5xl font-bold bg-gradient-to-r from-purple-400 via-pink-500 to-purple-400 bg-clip-text text-transparent inline-block">
-            ${siteName}
+            ${SITE_NAME}
         </h1>
         <p class="text-white/60 text-xs sm:text-sm mt-2">母带级音质 · 随心收藏 · 自由列表</p>
     </div>
     <div class="layout-wrapper">
     <div class="layout-main">
     <div class="flex justify-center gap-2 sm:gap-4 mb-5 sm:mb-8">
-        <button @click="switchTab('search')" :class="{active: currentTab==='search'}" class="tab-btn">🔍 <span class="hidden xs:inline">搜索</span><span class="xs:hidden">搜索</span></button>
+        <button @click="switchTab('search')" :class="{active: currentTab==='search'}" class="tab-btn">🔍 搜索</button>
         <button @click="switchTab('favorites')" :class="{active: currentTab==='favorites'}" class="tab-btn">
             ❤️ 收藏<span v-if="favorites.length" class="play-queue-badge">{{ favorites.length }}</span>
         </button>
@@ -436,46 +631,30 @@ function buildHTML(siteName, proxy) {
     </div>
     </div><!-- end layout-main -->
     <div class="layout-sidebar hidden lg:block">
-        <div v-if="currentSong" class="glass-card p-5">
-            <div class="flex flex-col items-center gap-4">
-                <img :src="currentSong.artwork" class="w-48 h-48 rounded-2xl shadow-2xl rotate-slow">
-                <div class="w-full text-center">
-                    <h2 class="text-xl font-bold truncate">{{ currentSong.title }}</h2>
-                    <p class="text-white/60 text-sm mt-1">{{ currentSong.artist }}</p>
-                    <div class="mt-2 flex items-center gap-2 justify-center flex-wrap">
-                        <span v-if="playQueue.length" class="text-xs text-white/40">{{ currentQueueIndex+1 }} / {{ playQueue.length }}</span>
-                        <span v-if="isShuffle" class="text-xs bg-pink-500/20 text-pink-300 px-2 py-0.5 rounded-full">随机</span>
-                        <span v-if="isLoop" class="text-xs bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full">单曲循环</span>
+        <div v-if="currentSong" class="glass-card p-4">
+            <!-- 词 button header -->
+            <div class="flex items-center justify-between mb-3">
+                <span class="text-sm font-semibold text-white/50 tracking-widest uppercase">歌词</span>
+                <button @click="toggleLyrics"
+                    class="px-4 py-1.5 rounded-full text-sm font-bold transition-all"
+                    :class="showLyrics ? 'bg-purple-600/60 text-white border border-purple-400/50 shadow-lg shadow-purple-900/30' : 'bg-white/10 hover:bg-white/20 text-white/60'">
+                    🎤 词
+                </button>
+            </div>
+            <!-- Lyrics panel -->
+            <div v-if="showLyrics">
+                <div v-if="loadingLyrics" class="flex justify-center py-8"><span class="loader"></span></div>
+                <div v-else-if="!lyrics.length" class="text-center py-8 text-white/30 text-sm">暂无歌词</div>
+                <div v-else ref="lyricsContainerSidebar" class="sidebar-lyrics-panel">
+                    <div v-for="(line, i) in lyrics" :key="i"
+                        :class="['lyric-line', i===currentLyricIdx ? 'lyric-line-active' : '']">
+                        {{ line.text }}
                     </div>
                 </div>
-                <div class="control-bar w-full">
-                    <button @click="toggleShuffle" class="control-btn text-base" :class="{'control-btn-active': isShuffle}">🔀</button>
-                    <button @click="playPrev" class="control-btn" :disabled="!hasPrev">⏮</button>
-                    <button @click="togglePlay" class="control-btn control-btn-play">{{ isPlaying?'⏸':'▶' }}</button>
-                    <button @click="playNext" class="control-btn" :disabled="!hasNext">⏭</button>
-                    <button @click="toggleLoop" class="control-btn text-base" :class="{'control-btn-active': isLoop}">🔁</button>
-                </div>
-                <div class="flex items-center gap-2 w-full">
-                    <span class="text-xs font-mono opacity-50 w-10 text-right">{{ currentTime }}</span>
-                    <div class="progress-track" @click="seek">
-                        <div class="progress-fill" :style="{width: progressPercent+'%'}">
-                            <div class="progress-thumb"></div>
-                        </div>
-                    </div>
-                    <span class="text-xs font-mono opacity-50 w-10">{{ duration }}</span>
-                </div>
-                <div class="flex gap-2 w-full mt-1">
-                    <button @click="downloadSong" :disabled="downloading"
-                        class="flex-1 bg-green-600/40 hover:bg-green-600/60 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all">
-                        <span v-if="downloading" class="loader w-4 h-4 border-2"></span>
-                        <span>{{ downloading?'下载中...':'⬇ 下载' }}</span>
-                    </button>
-                    <button @click="toggleFavorite(currentSong)"
-                        class="px-4 py-2 rounded-lg text-sm font-bold transition-all"
-                        :class="isFavorite(currentSong)?'bg-pink-600/40 hover:bg-pink-600/60':'bg-white/10 hover:bg-white/20'">
-                        {{ isFavorite(currentSong)?'❤️':'🤍' }}
-                    </button>
-                </div>
+            </div>
+            <div v-else class="flex flex-col items-center justify-center py-10 text-white/20 gap-2">
+                <div class="text-3xl">🎤</div>
+                <p class="text-xs">点击"词"按钮显示歌词</p>
             </div>
         </div>
         <div v-else class="glass-card p-8 flex flex-col items-center justify-center gap-3 text-white/30">
@@ -484,6 +663,10 @@ function buildHTML(siteName, proxy) {
         </div>
     </div>
     </div><!-- end layout-wrapper -->
+    <div v-if="currentSong && showLyrics && lyrics.length && currentLyricIdx >= 0"
+         class="floating-lyric-bar">
+        <span class="opacity-40 mr-2 text-xs">🎤</span>{{ lyrics[currentLyricIdx]?.text }}
+    </div>
     <div v-if="currentSong" class="mini-player player-mini">
         <div class="mini-player-prog">
             <div class="mini-player-prog-fill" :style="{width: progressPercent+'%'}"></div>
@@ -496,9 +679,42 @@ function buildHTML(siteName, proxy) {
         <button @click="playPrev" class="control-btn !w-9 !h-9 !text-sm" :disabled="!hasPrev">⏮</button>
         <button @click="togglePlay" class="control-btn control-btn-play !w-11 !h-11 !text-lg">{{ isPlaying?'⏸':'▶' }}</button>
         <button @click="playNext" class="control-btn !w-9 !h-9 !text-sm" :disabled="!hasNext">⏭</button>
+        <button @click="toggleLyrics" class="control-btn !w-9 !h-9 !text-xs font-bold" :class="{'control-btn-active': showLyrics}" title="歌词">词</button>
+    </div>
+    <div v-if="currentSong" class="tablet-player">
+        <div class="tablet-player-prog" @click="seekFromTabletBar">
+            <div class="tablet-player-prog-fill" :style="{width: progressPercent+'%'}"></div>
+        </div>
+        <div class="tablet-player-inner">
+            <img :src="currentSong.artwork" class="tablet-player-art">
+            <div class="tablet-player-info">
+                <div class="font-semibold truncate text-sm">{{ currentSong.title }}</div>
+                <div class="text-xs text-white/50 truncate">{{ currentSong.artist }}</div>
+                <div class="flex items-center gap-2 mt-0.5">
+                    <span class="text-xs font-mono opacity-40">{{ currentTime }}</span>
+                    <span class="text-xs opacity-20">/</span>
+                    <span class="text-xs font-mono opacity-40">{{ duration }}</span>
+                    <span v-if="isShuffle" class="text-xs bg-pink-500/20 text-pink-300 px-1.5 py-0.5 rounded-full">随机</span>
+                    <span v-if="isLoop" class="text-xs bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded-full">循环</span>
+                </div>
+            </div>
+            <div class="tablet-player-controls">
+                <button @click="toggleShuffle" class="control-btn !w-9 !h-9 !text-sm" :class="{'control-btn-active': isShuffle}" title="随机">🔀</button>
+                <button @click="playPrev" class="control-btn !w-9 !h-9" :disabled="!hasPrev">⏮</button>
+                <button @click="togglePlay" class="control-btn control-btn-play !w-12 !h-12 !text-xl">{{ isPlaying?'⏸':'▶' }}</button>
+                <button @click="playNext" class="control-btn !w-9 !h-9" :disabled="!hasNext">⏭</button>
+                <button @click="toggleLoop" class="control-btn !w-9 !h-9 !text-sm" :class="{'control-btn-active': isLoop}" title="循环">🔁</button>
+                <button @click="toggleLyrics" class="control-btn !w-9 !h-9 !text-xs font-bold" :class="{'control-btn-active': showLyrics}" title="歌词">词</button>
+                <button @click="toggleFavorite(currentSong)" class="control-btn !w-9 !h-9 !text-base">{{ isFavorite(currentSong)?'❤️':'🤍' }}</button>
+                <button @click="downloadSong" :disabled="downloading" class="control-btn !w-9 !h-9 !text-sm" title="下载">
+                    <span v-if="downloading" class="loader !w-4 !h-4 !border-2"></span>
+                    <span v-else>⬇</span>
+                </button>
+            </div>
+        </div>
     </div>
     <transition name="fade">
-        <div v-if="message" class="fixed bottom-24 sm:bottom-10 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur px-5 py-3 rounded-full text-sm z-[200] border border-white/10 whitespace-nowrap">
+        <div v-if="message" class="fixed bottom-24 sm:bottom-24 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur px-5 py-3 rounded-full text-sm z-[200] border border-white/10 whitespace-nowrap">
             {{ message }}
         </div>
     </transition>
@@ -528,46 +744,95 @@ function buildHTML(siteName, proxy) {
             <button @click="songToPlaylist=null" class="w-full bg-white/10 hover:bg-white/20 py-3 rounded-xl transition-all">关闭</button>
         </div>
     </div>
+    <audio v-if="currentSong" ref="audioPlayer" :src="currentPlayUrl"
+        @loadedmetadata="onLoaded" @timeupdate="onTimeUpdate" @ended="onEnded" style="display:none"></audio>
 </div>
 <script>
-const { createApp, ref, computed, watch } = Vue;
-const PROXY = '${proxy}';
+const { createApp, ref, computed, watch, nextTick } = Vue;
+const PROXY = '${proxyBase}';
 const defaultCover = 'https://y.gtimg.cn/music/photo_new/T002R300x300M000000MkMni19ClKG.jpg';
 createApp({
     setup() {
-        const currentTab       = ref('search');
-        const keyword          = ref('');
-        const songs            = ref([]);
-        const loading          = ref(false);
-        const currentSong      = ref(null);
-        const currentPlayUrl   = ref('');
-        const message          = ref('');
-        const downloading      = ref(false);
-        const currentQuality   = ref('standard');
-        const audioPlayer      = ref(null);
-        const isPlaying        = ref(false);
-        const isLoop           = ref(false);
-        const isShuffle        = ref(false);
-        const currentTime      = ref('00:00');
-        const duration         = ref('00:00');
-        const progressPercent  = ref(0);
-        const playQueue        = ref([]);
+        const currentTab        = ref('search');
+        const keyword           = ref('');
+        const songs             = ref([]);
+        const loading           = ref(false);
+        const currentSong       = ref(null);
+        const currentPlayUrl    = ref('');
+        const message           = ref('');
+        const downloading       = ref(false);
+        const currentQuality    = ref('standard');
+        const audioPlayer       = ref(null);
+        const isPlaying         = ref(false);
+        const isLoop            = ref(false);
+        const isShuffle         = ref(false);
+        const currentTime       = ref('00:00');
+        const duration          = ref('00:00');
+        const progressPercent   = ref(0);
+        const playQueue         = ref([]);
         const currentQueueIndex = ref(-1);
-        const favorites        = ref(JSON.parse(localStorage.getItem('otc_favs') || '[]'));
-        const playlists        = ref(JSON.parse(localStorage.getItem('otc_pls')  || '[]'));
-        const currentPlaylist  = ref(null);
-        const showCreatePlaylist = ref(false);
-        const newPlaylistName    = ref('');
-        const songToPlaylist     = ref(null);
+        const favorites         = ref(JSON.parse(localStorage.getItem('otc_favs') || '[]'));
+        const playlists         = ref(JSON.parse(localStorage.getItem('otc_pls')  || '[]'));
+        const currentPlaylist   = ref(null);
+        const showCreatePlaylist  = ref(false);
+        const newPlaylistName     = ref('');
+        const songToPlaylist      = ref(null);
+        const showLyrics          = ref(false);
+        const lyrics              = ref([]);
+        const currentLyricIdx     = ref(-1);
+        const loadingLyrics       = ref(false);
+        const lyricsContainerSidebar = ref(null);
         const qualities  = [
-            { value: 'low',      label: '标准'   },
-            { value: 'standard', label: '高品质'  },
-            { value: 'high',     label: '无损'    },
+            { value: 'low',      label: '标准'  },
+            { value: 'standard', label: '高品质' },
+            { value: 'high',     label: '无损'   },
         ];
         const quickTags = ['晴天','夜曲','起风了','周杰伦','陈奕迅','邓紫棋'];
+        const parseLrc = lrcStr => {
+            const result = [];
+            for (const line of lrcStr.split('\\n')) {
+                const m = line.match(/\\[(\\d{2}):(\\d{2}(?:\\.\\d+)?)\\](.*)/);
+                if (m) {
+                    const time = parseInt(m[1]) * 60 + parseFloat(m[2]);
+                    const text = m[3].trim();
+                    if (text) result.push({ time, text });
+                }
+            }
+            return result.sort((a, b) => a.time - b.time);
+        };
+        const fetchLyrics = async () => {
+            if (!currentSong.value) return;
+            loadingLyrics.value = true;
+            lyrics.value = [];
+            currentLyricIdx.value = -1;
+            try {
+                const body = {
+                    req_1: {
+                        module: 'music.musichallSong.PlayLyricInfo',
+                        method: 'GetPlayLyricInfo',
+                        param: { songMID: currentSong.value.songmid, songID: currentSong.value.id },
+                    }
+                };
+                const res = await axios.post(PROXY + 'https://u.y.qq.com/cgi-bin/musicu.fcg', body);
+                const raw = res.data?.req_1?.data?.lyric || '';
+                let lrcStr = raw;
+                if (raw && !raw.includes('[')) {
+                    try {
+                        const bytes = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+                        lrcStr = new TextDecoder('utf-8').decode(bytes);
+                    } catch { lrcStr = raw; }
+                }
+                lyrics.value = parseLrc(lrcStr);
+                if (!lyrics.value.length) showMsg('暂无歌词');
+            } catch { showMsg('歌词获取失败'); }
+            finally { loadingLyrics.value = false; }
+        };
+        const toggleLyrics = () => {
+            showLyrics.value = !showLyrics.value;
+            if (showLyrics.value && !lyrics.value.length && !loadingLyrics.value) fetchLyrics();
+        };
         watch(favorites, v => localStorage.setItem('otc_favs', JSON.stringify(v)), { deep: true });
         watch(playlists, v => localStorage.setItem('otc_pls',  JSON.stringify(v)), { deep: true });
-
         const displaySongs = computed(() => {
             if (currentTab.value === 'search')    return songs.value;
             if (currentTab.value === 'favorites') return favorites.value;
@@ -576,6 +841,7 @@ createApp({
         });
         const hasPrev = computed(() => playQueue.value.length > 0 && currentQueueIndex.value > 0);
         const hasNext = computed(() => playQueue.value.length > 0 && currentQueueIndex.value < playQueue.value.length - 1);
+
         const showMsg = msg => { message.value = msg; setTimeout(() => message.value = '', 2200); };
         const fmt = s => {
             if (isNaN(s) || s == null) return '00:00';
@@ -623,6 +889,8 @@ createApp({
                 currentQueueIndex.value = idx >= 0 ? idx : 0;
             }
             currentSong.value = song;
+            lyrics.value = [];
+            currentLyricIdx.value = -1;
             showMsg('获取播放链接...');
             try {
                 const levelMap = { low: 'standard', standard: 'exhigh', high: 'lossless' };
@@ -632,13 +900,14 @@ createApp({
                     currentPlayUrl.value = res.data.data.url;
                     isPlaying.value = true;
                     setTimeout(() => audioPlayer.value?.play(), 100);
+                    if (showLyrics.value) fetchLyrics();
                 } else { showMsg('链接获取失败'); }
             } catch { showMsg('播放失败'); }
         };
         const playAll     = list => { if (!list?.length) return; isShuffle.value = false; const q = [...list]; playSong(q[0], q, 0); showMsg(\`开始播放 \${q.length} 首\`); };
         const playShuffle = list => { if (!list?.length) return; isShuffle.value = true;  const q = [...list].sort(() => Math.random()-0.5); playSong(q[0], q, 0); showMsg(\`随机播放 \${q.length} 首\`); };
         const refreshPlay = () => playSong(currentSong.value);
-        const isFavorite = song => favorites.value.some(f => f.id === song.id);
+        const isFavorite     = song => favorites.value.some(f => f.id === song.id);
         const toggleFavorite = song => {
             const idx = favorites.value.findIndex(f => f.id === song.id);
             if (idx > -1) { favorites.value.splice(idx, 1); showMsg('已取消收藏'); }
@@ -669,23 +938,50 @@ createApp({
             const qi = playQueue.value.findIndex(s => s.id === song.id);
             if (qi > -1) { playQueue.value.splice(qi, 1); if (currentQueueIndex.value >= qi) currentQueueIndex.value = Math.max(0, currentQueueIndex.value-1); }
         };
+        const scrollLyricsToActive = () => {
+            nextTick(() => {
+                const container = lyricsContainerSidebar.value;
+                if (!container) return;
+                const active = container.querySelector('.lyric-line-active');
+                if (active) active.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+        };
         const onLoaded     = () => { duration.value = fmt(audioPlayer.value.duration); };
         const onTimeUpdate = () => {
             if (!audioPlayer.value) return;
             currentTime.value     = fmt(audioPlayer.value.currentTime);
             progressPercent.value = (audioPlayer.value.currentTime / audioPlayer.value.duration * 100) || 0;
+            if (showLyrics.value && lyrics.value.length) {
+                const t = audioPlayer.value.currentTime;
+                let idx = -1;
+                for (let i = 0; i < lyrics.value.length; i++) {
+                    if (lyrics.value[i].time <= t) idx = i; else break;
+                }
+                if (idx !== currentLyricIdx.value) {
+                    currentLyricIdx.value = idx;
+                    scrollLyricsToActive();
+                }
+            }
         };
-        const togglePlay = () => {
+        const togglePlay    = () => {
             if (!audioPlayer.value) return;
             isPlaying.value ? audioPlayer.value.pause() : audioPlayer.value.play();
             isPlaying.value = !isPlaying.value;
         };
         const toggleLoop    = () => { isLoop.value    = !isLoop.value;    showMsg(isLoop.value    ? '单曲循环 开' : '单曲循环 关'); };
         const toggleShuffle = () => { isShuffle.value = !isShuffle.value; showMsg(isShuffle.value ? '随机播放 开' : '随机播放 关'); };
-        const seek = e => {
+
+        const seekByFraction = frac => {
             if (!audioPlayer.value?.duration) return;
+            audioPlayer.value.currentTime = frac * audioPlayer.value.duration;
+        };
+        const seek = e => {
             const rect = e.currentTarget.getBoundingClientRect();
-            audioPlayer.value.currentTime = ((e.clientX - rect.left) / rect.width) * audioPlayer.value.duration;
+            seekByFraction((e.clientX - rect.left) / rect.width);
+        };
+        const seekFromTabletBar = e => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            seekByFraction((e.clientX - rect.left) / rect.width);
         };
         const onEnded = () => {
             isPlaying.value = false;
@@ -724,17 +1020,18 @@ createApp({
             currentQuality, qualities, quickTags, audioPlayer, isPlaying, isLoop, isShuffle,
             currentTime, duration, progressPercent, playQueue, currentQueueIndex,
             favorites, playlists, currentPlaylist, showCreatePlaylist, newPlaylistName, songToPlaylist,
+            showLyrics, lyrics, currentLyricIdx, loadingLyrics,
+            lyricsContainerSidebar,
             displaySongs, hasPrev, hasNext,
             switchTab, searchMusic, playSong, playAll, playShuffle, refreshPlay,
             toggleFavorite, isFavorite, createPlaylist, deletePlaylist,
             openPlaylist, showAddToPlaylist, addToPlaylist, removeFromPlaylist,
             onLoaded, onTimeUpdate, togglePlay, toggleLoop, toggleShuffle,
-            seek, onEnded, playPrev, playNext, downloadSong,
+            seek, seekFromTabletBar, onEnded, playPrev, playNext, downloadSong, toggleLyrics,
         };
     }
 }).mount('#app');
-</script>
+<\/script>
 </body>
-</html>
-`;
+</html>`;
 }
