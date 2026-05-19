@@ -1,11 +1,3 @@
-/**
- * OTC 音乐网 — Cloudflare Worker
- *
- * 环境变量 (在 wrangler.toml 或 CF Dashboard 中配置):
- *   SITE_NAME  : 站点名称，默认 "OTC 音乐网"
- *   PROXY_URL  : 代理前缀 URL，默认 "https://proxy.api.030101.xyz/"
- */
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
